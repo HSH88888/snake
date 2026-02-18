@@ -131,6 +131,7 @@ class Game {
         this.mouse = { x: 0, y: 0, down: false };
 
         this.isRunning = false;
+        this.isPaused = false;
         this.lives = 3;
         this.score = 0;
         this.keys = {};
@@ -179,6 +180,7 @@ class Game {
         window.addEventListener('keydown', e => {
             this.keys[e.code] = true;
             if (e.code === 'Space') this.mouse.down = true;
+            if (e.code === 'Escape' && this.isRunning) this.togglePause();
         });
         window.addEventListener('keyup', e => {
             this.keys[e.code] = false;
@@ -191,7 +193,20 @@ class Game {
         });
         document.getElementById('btn-restart').addEventListener('click', () => {
             document.getElementById('game-over-screen').style.display = 'none';
-            document.getElementById('start-screen').style.display = 'flex';
+            this.backToStart();
+        });
+        document.getElementById('btn-continue').addEventListener('click', () => {
+            this.continueGame();
+        });
+        document.getElementById('btn-pause').addEventListener('click', () => {
+            this.togglePause();
+        });
+        document.getElementById('btn-resume').addEventListener('click', () => {
+            this.togglePause();
+        });
+        document.getElementById('btn-pause-home').addEventListener('click', () => {
+            document.getElementById('pause-screen').style.display = 'none';
+            this.backToStart();
         });
 
         const aiSlider = document.getElementById('ai-count');
@@ -271,7 +286,7 @@ class Game {
 
     loop() {
         requestAnimationFrame(() => this.loop());
-        if (!this.isRunning) return;
+        if (!this.isRunning || this.isPaused) return;
 
         // Update
         this.snakes.forEach(s => s.update());
@@ -476,6 +491,31 @@ class Game {
             div.innerHTML = `<span>#${i + 1} ${name}</span><span>${s.nodes.length}</span>`;
             el.appendChild(div);
         }
+    }
+
+    togglePause() {
+        this.isPaused = !this.isPaused;
+        document.getElementById('pause-screen').style.display = this.isPaused ? 'flex' : 'none';
+    }
+
+    continueGame() {
+        document.getElementById('game-over-screen').style.display = 'none';
+        document.getElementById('hud').style.display = 'block';
+        this.lives = 3;
+        this.player.respawn();
+        this.player.alive = true;
+        if (!this.snakes.includes(this.player)) this.snakes.push(this.player);
+        this.isRunning = true;
+        this.isPaused = false;
+    }
+
+    backToStart() {
+        this.isRunning = false;
+        this.isPaused = false;
+        document.getElementById('hud').style.display = 'none';
+        document.getElementById('game-over-screen').style.display = 'none';
+        document.getElementById('pause-screen').style.display = 'none';
+        document.getElementById('start-screen').style.display = 'flex';
     }
 
     gameOver() {

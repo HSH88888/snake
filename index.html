@@ -69,6 +69,7 @@
                 </div>
             </div>
             <div id="shield-indicator" style="display:none">🛡️ Shield</div>
+            <button id="btn-pause" style="pointer-events:auto; padding:6px 14px; font-size:0.9rem;">⏸️</button>
         </div>
 
         <div id="ranking-panel">
@@ -79,12 +80,24 @@
         <canvas id="minimap" width="150" height="150"></canvas>
     </div>
 
+    <!-- ═══ Pause Screen ═══ -->
+    <div id="pause-screen" style="display:none">
+        <h1>⏸️ 일시정지</h1>
+        <p style="color:#aaa; margin-bottom:30px;">게임이 일시정지되었습니다</p>
+        <button id="btn-resume">▶️ 계속하기</button>
+        <button id="btn-pause-home" style="margin-top:10px; background:linear-gradient(135deg, #ff3366, #ff6b6b);">🏠
+            처음으로</button>
+    </div>
+
     <!-- ═══ Game Over Screen ═══ -->
     <div id="game-over-screen" style="display:none">
         <h1>💀 게임 오버</h1>
         <p>최종 점수: <b id="final-score">0</b></p>
         <p>최종 길이: <b id="final-length">0</b></p>
-        <button id="btn-restart">🔄 다시 시작</button>
+        <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
+            <button id="btn-continue">🔄 계속하기</button>
+            <button id="btn-restart" style="background:linear-gradient(135deg, #ff3366, #ff6b6b);">🏠 처음으로</button>
+        </div>
     </div>
 
     <script src="game.js"></script>

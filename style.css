@@ -55,7 +55,8 @@ button:active {
 
 /* ═══ Screens ═══ */
 #start-screen,
-#game-over-screen {
+#game-over-screen,
+#pause-screen {
     position: absolute;
     top: 0;
     left: 0;

@@ -110,7 +110,8 @@ class Game {
         this.lives = 3;
         this.score = 0;
         this.keys = {};
-        this.isMobile = ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+        // Detect mobile (Touch OR Small Screen)
+        this.isMobile = ('ontouchstart' in window || navigator.maxTouchPoints > 0 || window.innerWidth <= 1024);
 
         this.minimapCanvas = document.getElementById('minimap');
         this.minimapCtx = this.minimapCanvas.getContext('2d');

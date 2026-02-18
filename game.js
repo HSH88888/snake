@@ -677,7 +677,8 @@ class Snake {
     }
 
     getBodyWidth() {
-        return Math.min(14, 6 + Math.floor(this.nodes.length / 12));
+        // Thickness grows noticeably as snake eats
+        return Math.min(22, 5 + Math.floor(this.nodes.length / 6));
     }
 
     grow(amount) {

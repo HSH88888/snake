@@ -13,21 +13,99 @@ const rand = (min, max) => Math.random() * (max - min) + min;
 const randInt = (min, max) => Math.floor(rand(min, max));
 const dist = (x1, y1, x2, y2) => Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 const lerp = (a, b, t) => a + (b - a) * t;
-const hslToStr = (h, s, l) => `hsl(${h},${s}%,${l}%)`;
+
+// ═══ COLOR UTILS (optimized — no per-frame string parsing) ═══
+function hexToRgb(hex) {
+    if (typeof hex === 'number') hex = '#' + hex.toString(16).padStart(6, '0');
+    if (typeof hex !== 'string' || hex.length < 7) return { r: 128, g: 128, b: 128 };
+    return {
+        r: parseInt(hex.substring(1, 3), 16),
+        g: parseInt(hex.substring(3, 5), 16),
+        b: parseInt(hex.substring(5, 7), 16)
+    };
+}
+
+function shadeRgb(rgb, pct) {
+    return {
+        r: Math.min(255, Math.max(0, Math.floor(rgb.r * (100 + pct) / 100))),
+        g: Math.min(255, Math.max(0, Math.floor(rgb.g * (100 + pct) / 100))),
+        b: Math.min(255, Math.max(0, Math.floor(rgb.b * (100 + pct) / 100)))
+    };
+}
+
+function rgbStr(rgb, alpha) {
+    if (alpha !== undefined) return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+    return `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+}
+
+// Pre-compute a shaded hex string (used only during init, not per-frame)
+function shadeColor(color, pct) {
+    if (typeof color === 'string' && color.startsWith('hsl')) return color;
+    const rgb = hexToRgb(color);
+    const s = shadeRgb(rgb, pct);
+    return `rgb(${s.r},${s.g},${s.b})`;
+}
+
+// ═══ SEGMENT SPRITE CACHE ═══
+// Pre-render circle sprites at various sizes to avoid per-frame gradient creation
+const _spriteCache = new Map();
+
+function getSegmentSprite(radius, rgb, isPattern, patternRgb) {
+    const r = Math.round(radius);
+    if (r <= 0) return null;
+    const baseKey = isPattern ? `p${rgb.r}_${rgb.g}_${rgb.b}_${patternRgb.r}_${patternRgb.g}_${patternRgb.b}` :
+        `s${rgb.r}_${rgb.g}_${rgb.b}`;
+    const key = `${baseKey}_${r}`;
+
+    if (_spriteCache.has(key)) return _spriteCache.get(key);
+
+    // Limit cache size
+    if (_spriteCache.size > 500) _spriteCache.clear();
+
+    const size = (r + 2) * 2;
+    const cv = document.createElement('canvas');
+    cv.width = size;
+    cv.height = size;
+    const c = cv.getContext('2d');
+    const cx = size / 2;
+    const cy = size / 2;
+
+    // Dark outline
+    const dark = shadeRgb(rgb, -60);
+    c.fillStyle = rgbStr(dark);
+    c.beginPath();
+    c.arc(cx, cy, r + 1, 0, Math.PI * 2);
+    c.fill();
+
+    // 3D gradient body
+    const grad = c.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.1, cx, cy, r);
+    const highlight = shadeRgb(rgb, 50);
+    const shadow = shadeRgb(rgb, -40);
+    grad.addColorStop(0, rgbStr(highlight));
+    grad.addColorStop(0.5, rgbStr(rgb));
+    grad.addColorStop(1, rgbStr(shadow));
+    c.fillStyle = grad;
+    c.beginPath();
+    c.arc(cx, cy, r, 0, Math.PI * 2);
+    c.fill();
+
+    const sprite = { canvas: cv, size, cx, cy };
+    _spriteCache.set(key, sprite);
+    return sprite;
+}
 
 // ═══ SNAKE SKIN PRESETS ═══
 const SKIN_PRESETS = [
-    // [primary, secondary, accent] — realistic color combos
-    ['#2d8c3c', '#1a5c27', '#4aba5c'],   // 초록 뱀
-    ['#c0392b', '#8b1a1a', '#e74c3c'],   // 붉은 뱀
-    ['#f39c12', '#c87604', '#f1c40f'],   // 황금 뱀
-    ['#8e44ad', '#5b2c80', '#bb6bd9'],   // 보라 뱀
-    ['#2980b9', '#1a5276', '#3498db'],   // 파란 뱀
-    ['#1abc9c', '#0e8c73', '#48d4a0'],   // 민트 뱀
-    ['#d35400', '#a04000', '#e67e22'],   // 주황 뱀
-    ['#2c3e50', '#1a252f', '#546e7a'],   // 검은 뱀
-    ['#e91e63', '#ad1457', '#f06292'],   // 분홍 뱀
-    ['#795548', '#4e342e', '#a1887f'],   // 갈색 뱀
+    ['#2d8c3c', '#1a5c27', '#4aba5c'],
+    ['#c0392b', '#8b1a1a', '#e74c3c'],
+    ['#f39c12', '#c87604', '#f1c40f'],
+    ['#8e44ad', '#5b2c80', '#bb6bd9'],
+    ['#2980b9', '#1a5276', '#3498db'],
+    ['#1abc9c', '#0e8c73', '#48d4a0'],
+    ['#d35400', '#a04000', '#e67e22'],
+    ['#2c3e50', '#1a252f', '#546e7a'],
+    ['#e91e63', '#ad1457', '#f06292'],
+    ['#795548', '#4e342e', '#a1887f'],
 ];
 
 const PATTERN_SKINS = [
@@ -60,9 +138,17 @@ class Game {
         this.minimapCanvas = document.getElementById('minimap');
         this.minimapCtx = this.minimapCanvas.getContext('2d');
 
-        // Background cache
-        this.bgCanvas = null;
-        this.bgDirty = true;
+        // Grid cache (Fix 3)
+        this.gridCanvas = null;
+        this.gridDirty = true;
+
+        // Viewport culling bounds (updated per frame)
+        this.vpLeft = 0;
+        this.vpRight = 0;
+        this.vpTop = 0;
+        this.vpBottom = 0;
+
+        this.hudTimer = 0;
 
         this.initInput();
         this.loop();
@@ -77,7 +163,7 @@ class Game {
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.width = window.innerWidth;
         this.height = window.innerHeight;
-        this.bgDirty = true;
+        this.gridDirty = true;
     }
 
     initInput() {
@@ -99,7 +185,6 @@ class Game {
             if (e.code === 'Space') this.mouse.down = false;
         });
 
-        // UI Buttons
         document.getElementById('btn-start').addEventListener('click', () => {
             document.getElementById('start-screen').style.display = 'none';
             this.startGame();
@@ -109,14 +194,12 @@ class Game {
             document.getElementById('start-screen').style.display = 'flex';
         });
 
-        // AI Slider
         const aiSlider = document.getElementById('ai-count');
         const aiLabel = document.getElementById('ai-count-label');
         if (aiSlider && aiLabel) {
             aiSlider.addEventListener('input', e => aiLabel.innerText = e.target.value);
         }
 
-        // Skin Selector
         document.querySelectorAll('.skin-option').forEach(opt => {
             opt.addEventListener('click', () => {
                 document.querySelectorAll('.skin-option').forEach(o => o.classList.remove('selected'));
@@ -132,7 +215,6 @@ class Game {
         this.score = 0;
         this.lives = 3;
 
-        // Player skin
         const selectedSkin = document.querySelector('.skin-option.selected');
         let playerSkin;
         if (selectedSkin.dataset.type === 'solid') {
@@ -147,13 +229,10 @@ class Game {
         this.player = new Snake(this, true, playerSkin);
         this.snakes.push(this.player);
 
-        // AI Settings
         this.targetAICount = parseInt(document.getElementById('ai-count').value) || DEFAULT_AI;
         this.difficulty = document.getElementById('difficulty').value;
 
-        for (let i = 0; i < this.targetAICount; i++) {
-            this.spawnAI();
-        }
+        for (let i = 0; i < this.targetAICount; i++) this.spawnAI();
         for (let i = 0; i < FOOD_COUNT; i++) this.spawnFood();
 
         document.getElementById('hud').style.display = 'block';
@@ -170,13 +249,20 @@ class Game {
 
     spawnFood(pos = null, value = 1) {
         const isBig = value > 3;
+        const hue = rand(0, 360);
+        // Pre-compute color as RGB (Fix 4 — no per-frame string creation)
+        const r0 = Math.floor(128 + 127 * Math.cos(hue * Math.PI / 180));
+        const g0 = Math.floor(128 + 127 * Math.cos((hue - 120) * Math.PI / 180));
+        const b0 = Math.floor(128 + 127 * Math.cos((hue + 120) * Math.PI / 180));
+        const colorStr = `rgb(${r0},${g0},${b0})`;
+
         this.foods.push({
             x: pos ? pos.x : rand(-WORLD_SIZE + 20, WORLD_SIZE - 20),
             y: pos ? pos.y : rand(-WORLD_SIZE + 20, WORLD_SIZE - 20),
             radius: isBig ? 8 : rand(3, 6),
             value: value,
-            color: `hsl(${rand(0, 360)}, 80%, 60%)`,
-            glowColor: `hsla(${rand(0, 360)}, 100%, 70%, 0.4)`,
+            color: colorStr,
+            r: r0, g: g0, b: b0,
             pulse: rand(0, Math.PI * 2),
             active: true
         });
@@ -190,15 +276,13 @@ class Game {
         this.snakes.forEach(s => s.update());
         this.snakes = this.snakes.filter(s => s.alive);
 
-        // Respawn AI
         const currentAI = this.snakes.filter(s => !s.isPlayer).length;
         if (currentAI < this.targetAICount) this.spawnAI();
 
-        // Respawn food
         if (this.foods.length < FOOD_COUNT && Math.random() < 0.1) this.spawnFood();
 
-        // Pulse food
-        this.foods.forEach(f => f.pulse += 0.05);
+        // Pulse food (batched, not individual timers)
+        for (let i = 0; i < this.foods.length; i++) this.foods[i].pulse += 0.05;
 
         // Camera follow
         if (this.player && this.player.alive) {
@@ -206,9 +290,23 @@ class Game {
             this.camera.y = lerp(this.camera.y, this.player.y, 0.08);
         }
 
+        // Compute viewport bounds for culling
+        const halfW = (this.width / 2) / this.camera.zoom + 100;
+        const halfH = (this.height / 2) / this.camera.zoom + 100;
+        this.vpLeft = this.camera.x - halfW;
+        this.vpRight = this.camera.x + halfW;
+        this.vpTop = this.camera.y - halfH;
+        this.vpBottom = this.camera.y + halfH;
+
         this.draw();
-        if (Math.random() < 0.1) this.updateHUD();
-        this.drawMinimap();
+
+        // HUD updates throttled
+        this.hudTimer++;
+        if (this.hudTimer > 6) {
+            this.updateHUD();
+            this.drawMinimap();
+            this.hudTimer = 0;
+        }
     }
 
     draw() {
@@ -216,7 +314,6 @@ class Game {
         const w = this.width;
         const h = this.height;
 
-        // ═══ Background ═══
         ctx.fillStyle = '#0a0e17';
         ctx.fillRect(0, 0, w, h);
 
@@ -225,71 +322,99 @@ class Game {
         ctx.scale(this.camera.zoom, this.camera.zoom);
         ctx.translate(-this.camera.x, -this.camera.y);
 
-        // ═══ Grid (pseudo-3D perspective feel) ═══
+        // ═══ Grid (cached — Fix 3) ═══
         this.drawGrid(ctx);
 
-        // ═══ World Boundary ═══
+        // ═══ World Boundary — no shadowBlur ═══
         ctx.strokeStyle = 'rgba(255, 0, 80, 0.4)';
         ctx.lineWidth = 4;
-        ctx.shadowBlur = 20;
-        ctx.shadowColor = 'rgba(255, 0, 80, 0.6)';
         ctx.strokeRect(-WORLD_SIZE, -WORLD_SIZE, WORLD_SIZE * 2, WORLD_SIZE * 2);
-        ctx.shadowBlur = 0;
+        // Glow as second wider transparent stroke
+        ctx.strokeStyle = 'rgba(255, 0, 80, 0.15)';
+        ctx.lineWidth = 12;
+        ctx.strokeRect(-WORLD_SIZE, -WORLD_SIZE, WORLD_SIZE * 2, WORLD_SIZE * 2);
 
-        // ═══ Food ═══
-        this.foods.forEach(f => {
-            if (!f.active) return;
-            const r = f.radius + Math.sin(f.pulse) * 1.5;
+        // ═══ Food (no shadowBlur — Fix 2) ═══
+        for (let i = 0; i < this.foods.length; i++) {
+            const f = this.foods[i];
+            if (!f.active) continue;
 
-            // Glow
-            ctx.shadowBlur = 12;
-            ctx.shadowColor = f.glowColor;
+            // Viewport culling
+            if (f.x < this.vpLeft || f.x > this.vpRight || f.y < this.vpTop || f.y > this.vpBottom) continue;
 
-            // 3D-ish food with gradient
-            const grad = ctx.createRadialGradient(f.x - r * 0.3, f.y - r * 0.3, 0, f.x, f.y, r);
-            grad.addColorStop(0, '#ffffff');
-            grad.addColorStop(0.3, f.color);
-            grad.addColorStop(1, shadeColor(f.color, -40));
+            const r = f.radius + Math.sin(f.pulse) * 1.2;
 
-            ctx.fillStyle = grad;
+            // Manual glow (cheap translucent circle instead of shadowBlur)
+            ctx.globalAlpha = 0.2;
+            ctx.fillStyle = f.color;
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, r * 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Main food circle (solid, no gradient — Fix 1 for food)
+            ctx.globalAlpha = 1.0;
+            // Simple 2-tone: highlight dot + base
+            ctx.fillStyle = f.color;
             ctx.beginPath();
             ctx.arc(f.x, f.y, r, 0, Math.PI * 2);
             ctx.fill();
-            ctx.shadowBlur = 0;
-        });
+
+            // Highlight dot
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            ctx.beginPath();
+            ctx.arc(f.x - r * 0.3, f.y - r * 0.3, r * 0.35, 0, Math.PI * 2);
+            ctx.fill();
+        }
 
         // ═══ Snakes (sorted: smaller first) ═══
-        const sorted = [...this.snakes].sort((a, b) => a.nodes.length - b.nodes.length);
-        sorted.forEach(s => s.draw(ctx));
+        const sorted = this.snakes.slice().sort((a, b) => a.nodes.length - b.nodes.length);
+        for (let i = 0; i < sorted.length; i++) sorted[i].draw(ctx);
 
         ctx.restore();
     }
 
+    // ═══ Grid — cached to offscreen canvas (Fix 3) ═══
     drawGrid(ctx) {
-        const spacing = 60;
-        const startX = Math.floor((-WORLD_SIZE) / spacing) * spacing;
-        const startY = Math.floor((-WORLD_SIZE) / spacing) * spacing;
+        if (this.gridDirty || !this.gridCanvas) {
+            const gridSize = WORLD_SIZE * 2;
+            // Use a smaller resolution for the grid cache (1/4 res)
+            const scale = 0.25;
+            const cw = gridSize * scale;
+            const ch = gridSize * scale;
 
-        ctx.strokeStyle = 'rgba(30, 50, 80, 0.3)';
-        ctx.lineWidth = 1;
+            this.gridCanvas = document.createElement('canvas');
+            this.gridCanvas.width = cw;
+            this.gridCanvas.height = ch;
+            const gc = this.gridCanvas.getContext('2d');
+            gc.scale(scale, scale);
 
-        ctx.beginPath();
-        for (let x = startX; x <= WORLD_SIZE; x += spacing) {
-            ctx.moveTo(x, -WORLD_SIZE);
-            ctx.lineTo(x, WORLD_SIZE);
+            // Grid lines
+            const spacing = 60;
+            gc.strokeStyle = 'rgba(30, 50, 80, 0.3)';
+            gc.lineWidth = 1 / scale; // compensate for scale
+            gc.beginPath();
+            for (let x = 0; x <= gridSize; x += spacing) {
+                gc.moveTo(x, 0);
+                gc.lineTo(x, gridSize);
+            }
+            for (let y = 0; y <= gridSize; y += spacing) {
+                gc.moveTo(0, y);
+                gc.lineTo(gridSize, y);
+            }
+            gc.stroke();
+
+            // Vignette
+            const grad = gc.createRadialGradient(gridSize / 2, gridSize / 2, 0, gridSize / 2, gridSize / 2, gridSize / 2);
+            grad.addColorStop(0, 'rgba(20, 40, 60, 0.15)');
+            grad.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
+            gc.fillStyle = grad;
+            gc.fillRect(0, 0, gridSize, gridSize);
+
+            this.gridDirty = false;
         }
-        for (let y = startY; y <= WORLD_SIZE; y += spacing) {
-            ctx.moveTo(-WORLD_SIZE, y);
-            ctx.lineTo(WORLD_SIZE, y);
-        }
-        ctx.stroke();
 
-        // Subtle radial vignette on the ground
-        const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, WORLD_SIZE);
-        grad.addColorStop(0, 'rgba(20, 40, 60, 0.15)');
-        grad.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(-WORLD_SIZE, -WORLD_SIZE, WORLD_SIZE * 2, WORLD_SIZE * 2);
+        // Blit cached grid
+        ctx.drawImage(this.gridCanvas, -WORLD_SIZE, -WORLD_SIZE, WORLD_SIZE * 2, WORLD_SIZE * 2);
     }
 
     drawMinimap() {
@@ -305,23 +430,23 @@ class Game {
         const scale = size / (WORLD_SIZE * 2);
         const toMap = v => (v + WORLD_SIZE) * scale;
 
-        // Foods (sparse)
+        // Foods (sparse — draw every 8th)
         ctx.fillStyle = 'rgba(0, 200, 180, 0.4)';
-        for (let i = 0; i < this.foods.length; i += 5) {
+        for (let i = 0; i < this.foods.length; i += 8) {
             const f = this.foods[i];
             ctx.fillRect(toMap(f.x), toMap(f.y), 1, 1);
         }
 
         // Snakes
-        this.snakes.forEach(s => {
-            if (s.nodes.length === 0) return;
+        for (let i = 0; i < this.snakes.length; i++) {
+            const s = this.snakes[i];
+            if (s.nodes.length === 0) continue;
             ctx.fillStyle = s.isPlayer ? '#00ff88' : '#ff3366';
             ctx.beginPath();
             ctx.arc(toMap(s.x), toMap(s.y), s.isPlayer ? 3 : 2, 0, Math.PI * 2);
             ctx.fill();
-        });
+        }
 
-        // Border
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -338,16 +463,18 @@ class Game {
         const boostPct = Math.max(0, (this.player.energy / 100) * 100);
         document.getElementById('boost-bar').style.width = `${boostPct}%`;
 
-        const list = [...this.snakes].sort((a, b) => b.nodes.length - a.nodes.length);
+        const list = this.snakes.slice().sort((a, b) => b.nodes.length - a.nodes.length);
         const el = document.getElementById('ranking-list');
         el.innerHTML = '';
-        list.slice(0, 5).forEach((s, i) => {
+        const top5 = list.slice(0, 5);
+        for (let i = 0; i < top5.length; i++) {
+            const s = top5[i];
             const div = document.createElement('div');
             div.className = `rank-item ${s === this.player ? 'me' : ''}`;
             const name = s === this.player ? '플레이어' : `AI #${s.id}`;
             div.innerHTML = `<span>#${i + 1} ${name}</span><span>${s.nodes.length}</span>`;
             el.appendChild(div);
-        });
+        }
     }
 
     gameOver() {
@@ -374,6 +501,16 @@ class Snake {
         this.id = Snake.idCounter++;
         this.skin = skin;
 
+        // ═══ Pre-compute colors (Fix 4) ═══
+        this.primaryRgb = hexToRgb(skin.primary);
+        this.secondaryRgb = hexToRgb(skin.secondary);
+        this.accentRgb = skin.accent ? hexToRgb(skin.accent) : this.primaryRgb;
+        this.darkBorderColor = rgbStr(shadeRgb(this.primaryRgb, -60));
+        this.headHighlight = rgbStr(shadeRgb(this.primaryRgb, 40));
+        this.headDark = rgbStr(shadeRgb(this.primaryRgb, -50));
+        this.snoutColor = rgbStr(shadeRgb(this.primaryRgb, 20));
+        this.nostrilColor = rgbStr(shadeRgb(this.primaryRgb, -50));
+
         this.x = 0;
         this.y = 0;
         this.angle = rand(0, Math.PI * 2);
@@ -390,7 +527,6 @@ class Snake {
         this.alive = true;
         this.kills = 0;
 
-        // Visual properties
         this.tongueTimer = 0;
         this.tongueOut = false;
 
@@ -420,7 +556,6 @@ class Snake {
         this.move();
         this.checkCollision();
 
-        // Tongue flick timer
         this.tongueTimer -= 1;
         if (this.tongueTimer <= 0) {
             this.tongueOut = !this.tongueOut;
@@ -432,19 +567,15 @@ class Snake {
 
     handleInput() {
         if (this.isPlayer) {
-            // Mouse direction
             this.targetAngle = Math.atan2(this.game.mouse.y, this.game.mouse.x);
 
-            // Keyboard override
             if (this.game.keys['KeyA'] || this.game.keys['ArrowLeft']) this.targetAngle = this.angle - 0.15;
             if (this.game.keys['KeyD'] || this.game.keys['ArrowRight']) this.targetAngle = this.angle + 0.15;
-            if (this.game.keys['KeyW'] || this.game.keys['ArrowUp']) { /* keep current angle, just go forward */ }
 
             this.boosting = this.game.mouse.down && this.energy > 0;
             if (this.boosting) {
                 this.energy -= 0.4;
                 this.speed = this.boostSpeed;
-                // Drop trail
                 if (Math.random() < 0.15 && this.nodes.length > 15) {
                     const tail = this.nodes[this.nodes.length - 1];
                     this.game.spawnFood({ x: tail.x, y: tail.y }, 1);
@@ -459,7 +590,6 @@ class Snake {
     }
 
     move() {
-        // Smooth turning
         let diff = this.targetAngle - this.angle;
         while (diff < -Math.PI) diff += Math.PI * 2;
         while (diff > Math.PI) diff -= Math.PI * 2;
@@ -469,16 +599,13 @@ class Snake {
         this.x += Math.cos(this.angle) * spd;
         this.y += Math.sin(this.angle) * spd;
 
-        // Clamp to world
         if (this.x < -WORLD_SIZE) this.x = -WORLD_SIZE;
         if (this.x > WORLD_SIZE) this.x = WORLD_SIZE;
         if (this.y < -WORLD_SIZE) this.y = -WORLD_SIZE;
         if (this.y > WORLD_SIZE) this.y = WORLD_SIZE;
 
-        // Add new head node
         this.nodes.unshift({ x: this.x, y: this.y });
 
-        // Segment following (smooth)
         for (let i = 1; i < this.nodes.length; i++) {
             const prev = this.nodes[i - 1];
             const curr = this.nodes[i];
@@ -492,18 +619,21 @@ class Snake {
             }
         }
 
-        // Trim excess
         const maxNodes = Math.max(15, this.nodes.length);
         while (this.nodes.length > maxNodes) this.nodes.pop();
     }
 
     checkCollision() {
-        // Food
         const headR = this.getRadius(0);
+
+        // Food — use squared distance to avoid sqrt
         for (let i = this.game.foods.length - 1; i >= 0; i--) {
             const f = this.game.foods[i];
             if (!f.active) continue;
-            if (dist(this.x, this.y, f.x, f.y) < headR + f.radius) {
+            const dx = this.x - f.x;
+            const dy = this.y - f.y;
+            const range = headR + f.radius;
+            if (dx * dx + dy * dy < range * range) {
                 f.active = false;
                 this.game.foods.splice(i, 1);
                 this.grow(f.value);
@@ -511,15 +641,24 @@ class Snake {
             }
         }
 
-        // Snake collision
-        for (const other of this.game.snakes) {
+        // Snake collision — optimized with squared distance
+        for (let si = 0; si < this.game.snakes.length; si++) {
+            const other = this.game.snakes[si];
             if (other === this || !other.alive) continue;
-            if (dist(this.x, this.y, other.x, other.y) > other.nodes.length * SEGMENT_DIST + 50) continue;
+
+            // Quick bounding check
+            const maxRange = other.nodes.length * SEGMENT_DIST + 50;
+            const dx0 = this.x - other.x;
+            const dy0 = this.y - other.y;
+            if (dx0 * dx0 + dy0 * dy0 > maxRange * maxRange) continue;
 
             for (let i = 4; i < other.nodes.length; i += 2) {
                 const seg = other.nodes[i];
                 const otherR = other.getRadius(i);
-                if (dist(this.x, this.y, seg.x, seg.y) < headR + otherR - 2) {
+                const range2 = headR + otherR - 2;
+                const sdx = this.x - seg.x;
+                const sdy = this.y - seg.y;
+                if (sdx * sdx + sdy * sdy < range2 * range2) {
                     this.die(other);
                     return;
                 }
@@ -531,11 +670,10 @@ class Snake {
         const total = this.nodes.length;
         if (total === 0) return 6;
         const t = index / total;
-        // Head is slightly narrower, body fattens, tapers at tail
         const baseR = 5 + Math.floor(total / 15);
-        if (t < 0.05) return baseR * 0.85; // Head - slightly narrower
-        if (t < 0.15) return baseR * lerp(0.85, 1.0, (t - 0.05) / 0.1); // Neck widens
-        if (t > 0.8) return baseR * lerp(1.0, 0.3, (t - 0.8) / 0.2); // Tail tapers
+        if (t < 0.05) return baseR * 0.85;
+        if (t < 0.15) return baseR * lerp(0.85, 1.0, (t - 0.05) / 0.1);
+        if (t > 0.8) return baseR * lerp(1.0, 0.3, (t - 0.8) / 0.2);
         return baseR;
     }
 
@@ -549,7 +687,6 @@ class Snake {
     die(killer) {
         this.alive = false;
         if (killer) killer.kills++;
-        // Drop food
         for (let i = 0; i < this.nodes.length; i += 3) {
             this.game.spawnFood(this.nodes[i], 3);
         }
@@ -558,85 +695,67 @@ class Snake {
 
     aiThink() { }
 
-    // ═══ DRAWING ═══
+    // ═══ OPTIMIZED DRAWING ═══
     draw(ctx) {
         if (this.nodes.length < 2) return;
 
         const total = this.nodes.length;
+        const vp = this.game;
 
-        // ═══ Drop Shadow ═══
-        ctx.save();
-        ctx.globalAlpha = 0.15;
+        // Quick check: is any part of this snake in viewport?
+        // Use head position + generous margin
+        const margin = total * SEGMENT_DIST;
+        if (this.x + margin < vp.vpLeft || this.x - margin > vp.vpRight ||
+            this.y + margin < vp.vpTop || this.y - margin > vp.vpBottom) return;
+
+        // ═══ Drop Shadow (every 3rd segment, lower alpha) ═══
+        ctx.globalAlpha = 0.1;
         ctx.fillStyle = '#000';
-        for (let i = 0; i < total; i += 2) {
+        for (let i = 0; i < total; i += 3) {
             const n = this.nodes[i];
             const r = this.getRadius(i);
             ctx.beginPath();
-            ctx.arc(n.x + 4, n.y + 6, r + 1, 0, Math.PI * 2);
+            ctx.arc(n.x + 3, n.y + 5, r + 1, 0, Math.PI * 2);
             ctx.fill();
         }
-        ctx.restore();
+        ctx.globalAlpha = 1.0;
 
-        // ═══ Body (thick outline for 3D depth) ═══
-        // Dark outline pass
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        // Draw body segments as circles with gradient for 3D effect
+        // ═══ Body — using cached sprites (Fix 1) ═══
         for (let i = total - 1; i >= 1; i--) {
             const n = this.nodes[i];
-            const r = this.getRadius(i);
-            const t = i / total;
 
-            // Determine color
-            let baseColor = this.skin.primary;
-            if (this.skin.pattern && i % 6 < 3) {
-                baseColor = this.skin.secondary;
+            // Viewport culling per segment
+            if (n.x < vp.vpLeft - 20 || n.x > vp.vpRight + 20 ||
+                n.y < vp.vpTop - 20 || n.y > vp.vpBottom + 20) continue;
+
+            const r = this.getRadius(i);
+            const isAlt = this.skin.pattern && (i % 6 < 3);
+            const rgb = isAlt ? this.secondaryRgb : this.primaryRgb;
+
+            const sprite = getSegmentSprite(r, rgb, false, null);
+            if (sprite) {
+                ctx.drawImage(sprite.canvas, n.x - sprite.cx, n.y - sprite.cy);
             }
 
-            // 3D sphere gradient per segment
-            const grad = ctx.createRadialGradient(
-                n.x - r * 0.3, n.y - r * 0.3, r * 0.1,
-                n.x, n.y, r
-            );
-            grad.addColorStop(0, shadeColor(baseColor, 50));  // highlight
-            grad.addColorStop(0.5, baseColor);
-            grad.addColorStop(1, shadeColor(baseColor, -40)); // shadow
-
-            // Dark border
-            ctx.beginPath();
-            ctx.arc(n.x, n.y, r + 1, 0, Math.PI * 2);
-            ctx.fillStyle = shadeColor(baseColor, -60);
-            ctx.fill();
-
-            // Main body
-            ctx.beginPath();
-            ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-            ctx.fillStyle = grad;
-            ctx.fill();
-
-            // Scale pattern (subtle diamond marks)
-            if (i % 3 === 0 && r > 4) {
-                ctx.save();
-                ctx.globalAlpha = 0.15;
-                ctx.translate(n.x, n.y);
-                const segAngle = Math.atan2(
-                    this.nodes[Math.max(0, i - 1)].y - n.y,
-                    this.nodes[Math.max(0, i - 1)].x - n.x
-                );
-                ctx.rotate(segAngle);
-
+            // Scale pattern (every 4th, only for larger segments)
+            if (i % 4 === 0 && r > 5) {
+                ctx.globalAlpha = 0.12;
                 ctx.fillStyle = '#000';
-                // Diamond scale
+                const prev = this.nodes[Math.max(0, i - 1)];
+                const sa = Math.atan2(prev.y - n.y, prev.x - n.x);
+                const cos = Math.cos(sa);
+                const sin = Math.sin(sa);
+                // Inline diamond (no save/restore/translate/rotate — much faster)
+                const r4 = r * 0.4;
+                const r3 = r * 0.3;
                 ctx.beginPath();
-                ctx.moveTo(0, -r * 0.4);
-                ctx.lineTo(r * 0.3, 0);
-                ctx.lineTo(0, r * 0.4);
-                ctx.lineTo(-r * 0.3, 0);
+                ctx.moveTo(n.x - sin * r4, n.y + cos * r4);
+                ctx.lineTo(n.x + cos * r3, n.y + sin * r3);
+                ctx.lineTo(n.x + sin * r4, n.y - cos * r4);
+                ctx.lineTo(n.x - cos * r3, n.y - sin * r3);
                 ctx.closePath();
                 ctx.fill();
-
-                ctx.restore();
+                ctx.globalAlpha = 1.0;
             }
         }
 
@@ -649,28 +768,26 @@ class Snake {
         const r = this.getRadius(0);
         const angle = this.angle;
 
-        // Head shape (elongated ellipse)
         ctx.save();
         ctx.translate(head.x, head.y);
         ctx.rotate(angle);
 
         // Head shadow
-        ctx.save();
-        ctx.globalAlpha = 0.15;
+        ctx.globalAlpha = 0.12;
         ctx.fillStyle = '#000';
         ctx.beginPath();
         ctx.ellipse(3, 5, r * 1.3, r * 0.95, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.restore();
+        ctx.globalAlpha = 1.0;
 
-        // Head gradient (3D)
+        // Head gradient (only 1 per frame per snake — acceptable)
         const headGrad = ctx.createRadialGradient(-r * 0.2, -r * 0.3, 0, 0, 0, r * 1.3);
-        headGrad.addColorStop(0, shadeColor(this.skin.primary, 40));
-        headGrad.addColorStop(0.6, this.skin.primary);
-        headGrad.addColorStop(1, shadeColor(this.skin.primary, -50));
+        headGrad.addColorStop(0, this.headHighlight);
+        headGrad.addColorStop(0.6, rgbStr(this.primaryRgb));
+        headGrad.addColorStop(1, this.headDark);
 
         // Dark outline
-        ctx.fillStyle = shadeColor(this.skin.primary, -60);
+        ctx.fillStyle = this.darkBorderColor;
         ctx.beginPath();
         ctx.ellipse(0, 0, r * 1.35, r * 1.0, 0, 0, Math.PI * 2);
         ctx.fill();
@@ -681,79 +798,66 @@ class Snake {
         ctx.ellipse(0, 0, r * 1.3, r * 0.95, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Snout (lighter triangle at front)
-        ctx.fillStyle = shadeColor(this.skin.primary, 20);
+        // Snout highlight
+        ctx.fillStyle = this.snoutColor;
+        ctx.globalAlpha = 0.25;
         ctx.beginPath();
         ctx.moveTo(r * 1.3, 0);
         ctx.lineTo(r * 0.6, -r * 0.5);
         ctx.lineTo(r * 0.6, r * 0.5);
         ctx.closePath();
-        ctx.globalAlpha = 0.3;
         ctx.fill();
         ctx.globalAlpha = 1.0;
 
-        // ═══ Tongue ═══
+        // Tongue
         if (this.tongueOut) {
             ctx.strokeStyle = '#cc2244';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             ctx.moveTo(r * 1.3, 0);
-            ctx.lineTo(r * 1.3 + r * 0.8, 0);
-            // Fork
-            ctx.moveTo(r * 1.3 + r * 0.6, 0);
-            ctx.lineTo(r * 1.3 + r * 1.0, -r * 0.25);
-            ctx.moveTo(r * 1.3 + r * 0.6, 0);
-            ctx.lineTo(r * 1.3 + r * 1.0, r * 0.25);
+            ctx.lineTo(r * 2.1, 0);
+            ctx.moveTo(r * 1.9, 0);
+            ctx.lineTo(r * 2.3, -r * 0.25);
+            ctx.moveTo(r * 1.9, 0);
+            ctx.lineTo(r * 2.3, r * 0.25);
             ctx.stroke();
         }
 
-        // ═══ Eyes ═══
-        const eyeOffX = r * 0.55;
-        const eyeOffY = r * 0.5;
-        const eyeR = r * 0.22;
-        const pupilR = eyeR * 0.55;
+        // Eyes (compact — fewer draw calls)
+        const ex = r * 0.55;
+        const ey = r * 0.5;
+        const er = r * 0.22;
+        const pr = er * 0.55;
 
-        // Left eye
-        ctx.fillStyle = '#f0e68c'; // yellowish snake eye
-        ctx.beginPath();
-        ctx.ellipse(eyeOffX, -eyeOffY, eyeR, eyeR * 1.2, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#333';
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-
-        // Left pupil (vertical slit)
-        ctx.fillStyle = '#111';
-        ctx.beginPath();
-        ctx.ellipse(eyeOffX, -eyeOffY, pupilR * 0.35, pupilR * 1.2, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Right eye
+        // Both eyes in one path where possible
         ctx.fillStyle = '#f0e68c';
         ctx.beginPath();
-        ctx.ellipse(eyeOffX, eyeOffY, eyeR, eyeR * 1.2, 0, 0, Math.PI * 2);
+        ctx.ellipse(ex, -ey, er, er * 1.2, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = '#333';
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
+        ctx.beginPath();
+        ctx.ellipse(ex, ey, er, er * 1.2, 0, 0, Math.PI * 2);
+        ctx.fill();
 
-        // Right pupil
+        // Both pupils
         ctx.fillStyle = '#111';
         ctx.beginPath();
-        ctx.ellipse(eyeOffX, eyeOffY, pupilR * 0.35, pupilR * 1.2, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Eye highlight
-        ctx.fillStyle = 'rgba(255,255,255,0.6)';
-        ctx.beginPath();
-        ctx.arc(eyeOffX - pupilR * 0.3, -eyeOffY - pupilR * 0.4, pupilR * 0.35, 0, Math.PI * 2);
+        ctx.ellipse(ex, -ey, pr * 0.35, pr * 1.2, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(eyeOffX - pupilR * 0.3, eyeOffY - pupilR * 0.4, pupilR * 0.35, 0, Math.PI * 2);
+        ctx.ellipse(ex, ey, pr * 0.35, pr * 1.2, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Nostril dots
-        ctx.fillStyle = shadeColor(this.skin.primary, -50);
+        // Highlights
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath();
+        ctx.arc(ex - pr * 0.3, -ey - pr * 0.4, pr * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(ex - pr * 0.3, ey - pr * 0.4, pr * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Nostrils
+        ctx.fillStyle = this.nostrilColor;
         ctx.beginPath();
         ctx.arc(r * 1.1, -r * 0.15, 1, 0, Math.PI * 2);
         ctx.arc(r * 1.1, r * 0.15, 1, 0, Math.PI * 2);
@@ -761,7 +865,7 @@ class Snake {
 
         ctx.restore();
 
-        // ═══ Name tag ═══
+        // Name tag (player only)
         if (this.isPlayer) {
             ctx.fillStyle = 'rgba(255,255,255,0.8)';
             ctx.font = 'bold 12px Outfit';
@@ -801,22 +905,22 @@ class AISnake extends Snake {
     aiThink() {
         this.timer--;
 
-        // ═══ Collision Avoidance ═══
+        // Collision Avoidance — optimized with squared distances
         const feelers = [
-            { angle: 0, dist: this.fov * 0.3 },
-            { angle: 0.4, dist: this.fov * 0.2 },
-            { angle: -0.4, dist: this.fov * 0.2 }
+            { angle: 0, d: this.fov * 0.3 },
+            { angle: 0.4, d: this.fov * 0.2 },
+            { angle: -0.4, d: this.fov * 0.2 }
         ];
 
         let dangerLeft = 0;
         let dangerRight = 0;
 
-        for (const f of feelers) {
+        for (let fi = 0; fi < 3; fi++) {
+            const f = feelers[fi];
             const fa = this.angle + f.angle;
-            const fx = this.x + Math.cos(fa) * f.dist;
-            const fy = this.y + Math.sin(fa) * f.dist;
+            const fx = this.x + Math.cos(fa) * f.d;
+            const fy = this.y + Math.sin(fa) * f.d;
 
-            // Wall check
             if (fx < -WORLD_SIZE + 100 || fx > WORLD_SIZE - 100 ||
                 fy < -WORLD_SIZE + 100 || fy > WORLD_SIZE - 100) {
                 if (f.angle > 0) dangerLeft += 10;
@@ -824,14 +928,25 @@ class AISnake extends Snake {
                 else { dangerLeft += 5; dangerRight += 5; }
             }
 
-            // Snake collision check
-            for (const s of this.game.snakes) {
+            // Only check nearby snakes (squared distance pre-filter)
+            for (let si = 0; si < this.game.snakes.length; si++) {
+                const s = this.game.snakes[si];
                 if (!s.alive || s === this) continue;
-                for (let i = 0; i < s.nodes.length; i += 4) {
-                    if (dist(fx, fy, s.nodes[i].x, s.nodes[i].y) < s.getRadius(i) + 10) {
+
+                // Quick distance check to head
+                const hd = (fx - s.x) * (fx - s.x) + (fy - s.y) * (fy - s.y);
+                const maxCheckDist = s.nodes.length * SEGMENT_DIST + 50;
+                if (hd > maxCheckDist * maxCheckDist) continue;
+
+                for (let i = 0; i < s.nodes.length; i += 5) {
+                    const sdx = fx - s.nodes[i].x;
+                    const sdy = fy - s.nodes[i].y;
+                    const threshold = s.getRadius(i) + 10;
+                    if (sdx * sdx + sdy * sdy < threshold * threshold) {
                         if (f.angle > 0) dangerLeft += 10;
                         else if (f.angle < 0) dangerRight += 10;
                         else { dangerLeft += 5; dangerRight += 5; }
+                        break; // One hit per snake is enough
                     }
                 }
             }
@@ -851,14 +966,14 @@ class AISnake extends Snake {
 
         this.boosting = false;
 
-        // ═══ Border Avoidance ═══
+        // Border avoidance
         const margin = 200;
         if (this.x < -WORLD_SIZE + margin) { this.targetAngle = 0; return; }
         if (this.x > WORLD_SIZE - margin) { this.targetAngle = Math.PI; return; }
         if (this.y < -WORLD_SIZE + margin) { this.targetAngle = Math.PI / 2; return; }
         if (this.y > WORLD_SIZE - margin) { this.targetAngle = -Math.PI / 2; return; }
 
-        // ═══ Food Seeking ═══
+        // Food Seeking
         if (this.timer <= 0 || !this.target || !this.target.active) {
             this.target = this.findBestFood();
             this.timer = this.reactTimer;
@@ -867,7 +982,6 @@ class AISnake extends Snake {
         if (this.target) {
             this.targetAngle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
         } else {
-            // Wander
             if (Math.random() < 0.03) this.targetAngle += rand(-0.5, 0.5);
         }
     }
@@ -875,13 +989,17 @@ class AISnake extends Snake {
     findBestFood() {
         let best = null;
         let bestScore = -Infinity;
+        const foods = this.game.foods;
+        const len = foods.length;
 
-        for (let i = 0; i < 30; i++) {
-            const f = this.game.foods[randInt(0, this.game.foods.length)];
+        for (let i = 0; i < 20; i++) {
+            const f = foods[randInt(0, len)];
             if (!f || !f.active) continue;
-            const d = dist(this.x, this.y, f.x, f.y);
-            if (d > this.fov) continue;
-            const score = f.value / (d + 1);
+            const dx = this.x - f.x;
+            const dy = this.y - f.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > this.fov * this.fov) continue;
+            const score = f.value / (d2 + 1);
             if (score > bestScore) {
                 bestScore = score;
                 best = f;
@@ -889,28 +1007,6 @@ class AISnake extends Snake {
         }
         return best;
     }
-}
-
-// ═══ UTILITY ═══
-function shadeColor(color, percent) {
-    // Handle hsl() strings
-    if (typeof color === 'string' && color.startsWith('hsl')) {
-        return color; // Can't easily shade hsl strings, return as-is
-    }
-    // Handle hex numbers
-    if (typeof color === 'number') {
-        color = '#' + color.toString(16).padStart(6, '0');
-    }
-    // Handle hex string
-    let R = parseInt(color.substring(1, 3), 16);
-    let G = parseInt(color.substring(3, 5), 16);
-    let B = parseInt(color.substring(5, 7), 16);
-
-    R = Math.min(255, Math.max(0, Math.floor(R * (100 + percent) / 100)));
-    G = Math.min(255, Math.max(0, Math.floor(G * (100 + percent) / 100)));
-    B = Math.min(255, Math.max(0, Math.floor(B * (100 + percent) / 100)));
-
-    return '#' + R.toString(16).padStart(2, '0') + G.toString(16).padStart(2, '0') + B.toString(16).padStart(2, '0');
 }
 
 // ═══ INIT ═══

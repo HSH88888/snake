@@ -526,6 +526,7 @@ class Snake {
         this.nodes = [];
         this.alive = true;
         this.kills = 0;
+        this.maxLength = 15; // target length — only grows via eating
 
         this.tongueTimer = 0;
         this.tongueOut = false;
@@ -540,6 +541,7 @@ class Snake {
         this.targetAngle = this.angle;
         this.alive = true;
         this.energy = 100;
+        this.maxLength = 15;
         this.nodes = [];
 
         for (let i = 0; i < 15; i++) {
@@ -619,8 +621,7 @@ class Snake {
             }
         }
 
-        const maxNodes = Math.max(15, this.nodes.length);
-        while (this.nodes.length > maxNodes) this.nodes.pop();
+        while (this.nodes.length > this.maxLength) this.nodes.pop();
     }
 
     checkCollision() {
@@ -678,10 +679,7 @@ class Snake {
     }
 
     grow(amount) {
-        const tail = this.nodes[this.nodes.length - 1];
-        for (let i = 0; i < amount * 2; i++) {
-            this.nodes.push({ x: tail.x, y: tail.y });
-        }
+        this.maxLength += amount * 2;
     }
 
     die(killer) {

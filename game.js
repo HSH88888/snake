@@ -214,6 +214,7 @@ class Game {
         this.foods = [];
         this.score = 0;
         this.lives = 3;
+        Snake.idCounter = 0; // Reset ID counter for clean numbering
 
         const selectedSkin = document.querySelector('.skin-option.selected');
         let playerSkin;
@@ -467,11 +468,12 @@ class Game {
         const el = document.getElementById('ranking-list');
         el.innerHTML = '';
         const top5 = list.slice(0, 5);
+        let aiNum = 0;
         for (let i = 0; i < top5.length; i++) {
             const s = top5[i];
             const div = document.createElement('div');
             div.className = `rank-item ${s === this.player ? 'me' : ''}`;
-            const name = s === this.player ? '플레이어' : `AI #${s.id}`;
+            const name = s === this.player ? '나 🐍' : `AI ${++aiNum}`;
             div.innerHTML = `<span>#${i + 1} ${name}</span><span>${s.nodes.length}</span>`;
             el.appendChild(div);
         }

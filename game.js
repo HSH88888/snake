@@ -467,10 +467,9 @@ class Game {
         const list = this.snakes.slice().sort((a, b) => b.nodes.length - a.nodes.length);
         const el = document.getElementById('ranking-list');
         el.innerHTML = '';
-        const top5 = list.slice(0, 5);
         let aiNum = 0;
-        for (let i = 0; i < top5.length; i++) {
-            const s = top5[i];
+        for (let i = 0; i < list.length; i++) {
+            const s = list[i];
             const div = document.createElement('div');
             div.className = `rank-item ${s === this.player ? 'me' : ''}`;
             const name = s === this.player ? '나 🐍' : `AI ${++aiNum}`;

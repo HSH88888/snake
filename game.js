@@ -46,53 +46,19 @@ function shadeColor(color, pct) {
     return `rgb(${s.r},${s.g},${s.b})`;
 }
 
-// ═══ SEGMENT SPRITE CACHE ═══
-// Pre-render circle sprites at various sizes to avoid per-frame gradient creation
-const _spriteCache = new Map();
-
-function getSegmentSprite(radius, rgb, isPattern, patternRgb) {
-    const r = Math.round(radius);
-    if (r <= 0) return null;
-    const baseKey = isPattern ? `p${rgb.r}_${rgb.g}_${rgb.b}_${patternRgb.r}_${patternRgb.g}_${patternRgb.b}` :
-        `s${rgb.r}_${rgb.g}_${rgb.b}`;
-    const key = `${baseKey}_${r}`;
-
-    if (_spriteCache.has(key)) return _spriteCache.get(key);
-
-    // Limit cache size
-    if (_spriteCache.size > 500) _spriteCache.clear();
-
-    const size = (r + 2) * 2;
-    const cv = document.createElement('canvas');
-    cv.width = size;
-    cv.height = size;
-    const c = cv.getContext('2d');
-    const cx = size / 2;
-    const cy = size / 2;
-
-    // Dark outline
-    const dark = shadeRgb(rgb, -60);
-    c.fillStyle = rgbStr(dark);
-    c.beginPath();
-    c.arc(cx, cy, r + 1, 0, Math.PI * 2);
-    c.fill();
-
-    // 3D gradient body
-    const grad = c.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.1, cx, cy, r);
-    const highlight = shadeRgb(rgb, 50);
-    const shadow = shadeRgb(rgb, -40);
-    grad.addColorStop(0, rgbStr(highlight));
-    grad.addColorStop(0.5, rgbStr(rgb));
-    grad.addColorStop(1, rgbStr(shadow));
-    c.fillStyle = grad;
-    c.beginPath();
-    c.arc(cx, cy, r, 0, Math.PI * 2);
-    c.fill();
-
-    const sprite = { canvas: cv, size, cx, cy };
-    _spriteCache.set(key, sprite);
-    return sprite;
-}
+// ═══ PATTERN PRESETS (line dash patterns for snake bodies) ═══
+const LINE_PATTERNS = [
+    [],                     // solid
+    [12, 6],               // dashes
+    [4, 4],                // dots
+    [16, 4, 4, 4],         // dash-dot
+    [8, 4, 2, 4],          // morse
+    [20, 8],               // long dash
+    [6, 3],                // short dash
+    [10, 3, 3, 3, 3, 3],   // dash-dot-dot
+    [2, 8],                // sparse dots
+    [14, 4, 6, 4],         // mixed
+];
 
 // ═══ SNAKE SKIN PRESETS ═══
 const SKIN_PRESETS = [
@@ -567,7 +533,10 @@ class Snake {
         this.nodes = [];
         this.alive = true;
         this.kills = 0;
-        this.maxLength = 15; // target length — only grows via eating
+        this.maxLength = 15;
+
+        // Assign a unique pattern for this snake's body
+        this.patternDash = LINE_PATTERNS[this.id % LINE_PATTERNS.length];
 
         this.tongueTimer = 0;
         this.tongueOut = false;
@@ -666,7 +635,7 @@ class Snake {
     }
 
     checkCollision() {
-        const headR = this.getRadius(0);
+        const headR = this.getBodyWidth() / 2;
 
         // Food — use squared distance to avoid sqrt
         for (let i = this.game.foods.length - 1; i >= 0; i--) {
@@ -683,20 +652,19 @@ class Snake {
             }
         }
 
-        // Snake collision — optimized with squared distance
+        // Snake collision
         for (let si = 0; si < this.game.snakes.length; si++) {
             const other = this.game.snakes[si];
             if (other === this || !other.alive) continue;
 
-            // Quick bounding check
             const maxRange = other.nodes.length * SEGMENT_DIST + 50;
             const dx0 = this.x - other.x;
             const dy0 = this.y - other.y;
             if (dx0 * dx0 + dy0 * dy0 > maxRange * maxRange) continue;
 
+            const otherR = other.getBodyWidth() / 2;
             for (let i = 4; i < other.nodes.length; i += 2) {
                 const seg = other.nodes[i];
-                const otherR = other.getRadius(i);
                 const range2 = headR + otherR - 2;
                 const sdx = this.x - seg.x;
                 const sdy = this.y - seg.y;
@@ -708,15 +676,8 @@ class Snake {
         }
     }
 
-    getRadius(index) {
-        const total = this.nodes.length;
-        if (total === 0) return 6;
-        const t = index / total;
-        const baseR = 5 + Math.floor(total / 15);
-        if (t < 0.05) return baseR * 0.85;
-        if (t < 0.15) return baseR * lerp(0.85, 1.0, (t - 0.05) / 0.1);
-        if (t > 0.8) return baseR * lerp(1.0, 0.3, (t - 0.8) / 0.2);
-        return baseR;
+    getBodyWidth() {
+        return Math.min(14, 6 + Math.floor(this.nodes.length / 12));
     }
 
     grow(amount) {
@@ -734,119 +695,103 @@ class Snake {
 
     aiThink() { }
 
-    // ═══ OPTIMIZED DRAWING ═══
+    // ═══ LINE-BASED DRAWING (ultra fast) ═══
     draw(ctx) {
         if (this.nodes.length < 2) return;
 
         const total = this.nodes.length;
         const vp = this.game;
-
-        // Quick check: is any part of this snake in viewport?
-        // Use head position + generous margin
         const margin = total * SEGMENT_DIST;
         if (this.x + margin < vp.vpLeft || this.x - margin > vp.vpRight ||
             this.y + margin < vp.vpTop || this.y - margin > vp.vpBottom) return;
 
-        // ═══ Drop Shadow (every 3rd segment, lower alpha) ═══
-        ctx.globalAlpha = 0.1;
-        ctx.fillStyle = '#000';
-        for (let i = 0; i < total; i += 3) {
-            const n = this.nodes[i];
-            const r = this.getRadius(i);
-            ctx.beginPath();
-            ctx.arc(n.x + 3, n.y + 5, r + 1, 0, Math.PI * 2);
-            ctx.fill();
+        const w = this.getBodyWidth();
+
+        // Build path once, reuse for all passes
+        // --- Pass 1: Shadow ---
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.08;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = w + 4;
+        ctx.beginPath();
+        ctx.moveTo(this.nodes[0].x + 3, this.nodes[0].y + 4);
+        for (let i = 1; i < total; i += 2) {
+            ctx.lineTo(this.nodes[i].x + 3, this.nodes[i].y + 4);
         }
+        ctx.stroke();
         ctx.globalAlpha = 1.0;
 
-        // ═══ Body — using cached sprites (Fix 1) ═══
-        for (let i = total - 1; i >= 1; i--) {
-            const n = this.nodes[i];
+        // --- Pass 2: Dark outline ---
+        ctx.strokeStyle = this.darkBorderColor;
+        ctx.lineWidth = w + 3;
+        ctx.beginPath();
+        ctx.moveTo(this.nodes[0].x, this.nodes[0].y);
+        for (let i = 1; i < total; i++) ctx.lineTo(this.nodes[i].x, this.nodes[i].y);
+        ctx.stroke();
 
-            // Viewport culling per segment
-            if (n.x < vp.vpLeft - 20 || n.x > vp.vpRight + 20 ||
-                n.y < vp.vpTop - 20 || n.y > vp.vpBottom + 20) continue;
+        // --- Pass 3: Main body color ---
+        ctx.strokeStyle = rgbStr(this.primaryRgb);
+        ctx.lineWidth = w;
+        ctx.beginPath();
+        ctx.moveTo(this.nodes[0].x, this.nodes[0].y);
+        for (let i = 1; i < total; i++) ctx.lineTo(this.nodes[i].x, this.nodes[i].y);
+        ctx.stroke();
 
-            const r = this.getRadius(i);
-            const isAlt = this.skin.pattern && (i % 6 < 3);
-            const rgb = isAlt ? this.secondaryRgb : this.primaryRgb;
-
-            const sprite = getSegmentSprite(r, rgb, false, null);
-            if (sprite) {
-                ctx.drawImage(sprite.canvas, n.x - sprite.cx, n.y - sprite.cy);
-            }
-
-            // Scale pattern (every 4th, only for larger segments)
-            if (i % 4 === 0 && r > 5) {
-                ctx.globalAlpha = 0.12;
-                ctx.fillStyle = '#000';
-                const prev = this.nodes[Math.max(0, i - 1)];
-                const sa = Math.atan2(prev.y - n.y, prev.x - n.x);
-                const cos = Math.cos(sa);
-                const sin = Math.sin(sa);
-                // Inline diamond (no save/restore/translate/rotate — much faster)
-                const r4 = r * 0.4;
-                const r3 = r * 0.3;
-                ctx.beginPath();
-                ctx.moveTo(n.x - sin * r4, n.y + cos * r4);
-                ctx.lineTo(n.x + cos * r3, n.y + sin * r3);
-                ctx.lineTo(n.x + sin * r4, n.y - cos * r4);
-                ctx.lineTo(n.x - cos * r3, n.y - sin * r3);
-                ctx.closePath();
-                ctx.fill();
-                ctx.globalAlpha = 1.0;
-            }
+        // --- Pass 4: Pattern overlay ---
+        if (this.patternDash.length > 0) {
+            ctx.setLineDash(this.patternDash);
+            ctx.strokeStyle = rgbStr(this.secondaryRgb);
+            ctx.lineWidth = w - 2;
+            ctx.beginPath();
+            ctx.moveTo(this.nodes[0].x, this.nodes[0].y);
+            for (let i = 1; i < total; i++) ctx.lineTo(this.nodes[i].x, this.nodes[i].y);
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
 
-        // ═══ Head ═══
+        // --- Pass 5: Highlight stripe (center line for 3D feel) ---
+        ctx.globalAlpha = 0.15;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = Math.max(1, w * 0.25);
+        ctx.beginPath();
+        ctx.moveTo(this.nodes[0].x, this.nodes[0].y);
+        for (let i = 1; i < total; i += 2) ctx.lineTo(this.nodes[i].x, this.nodes[i].y);
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+
+        // Head
         this.drawHead(ctx);
     }
 
     drawHead(ctx) {
         const head = this.nodes[0];
-        const r = this.getRadius(0);
+        const w = this.getBodyWidth();
+        const r = w * 0.7;
         const angle = this.angle;
 
         ctx.save();
         ctx.translate(head.x, head.y);
         ctx.rotate(angle);
 
-        // Head shadow
-        ctx.globalAlpha = 0.12;
-        ctx.fillStyle = '#000';
-        ctx.beginPath();
-        ctx.ellipse(3, 5, r * 1.3, r * 0.95, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1.0;
-
-        // Head gradient (only 1 per frame per snake — acceptable)
-        const headGrad = ctx.createRadialGradient(-r * 0.2, -r * 0.3, 0, 0, 0, r * 1.3);
-        headGrad.addColorStop(0, this.headHighlight);
-        headGrad.addColorStop(0.6, rgbStr(this.primaryRgb));
-        headGrad.addColorStop(1, this.headDark);
-
-        // Dark outline
+        // Head ellipse (dark outline)
         ctx.fillStyle = this.darkBorderColor;
         ctx.beginPath();
-        ctx.ellipse(0, 0, r * 1.35, r * 1.0, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, 0, r * 1.4, r * 1.1, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Main head
-        ctx.fillStyle = headGrad;
+        // Head color
+        ctx.fillStyle = rgbStr(this.primaryRgb);
         ctx.beginPath();
-        ctx.ellipse(0, 0, r * 1.3, r * 0.95, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, 0, r * 1.3, r * 1.0, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Snout highlight
-        ctx.fillStyle = this.snoutColor;
-        ctx.globalAlpha = 0.25;
+        // Highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
         ctx.beginPath();
-        ctx.moveTo(r * 1.3, 0);
-        ctx.lineTo(r * 0.6, -r * 0.5);
-        ctx.lineTo(r * 0.6, r * 0.5);
-        ctx.closePath();
+        ctx.ellipse(-r * 0.2, -r * 0.2, r * 0.7, r * 0.4, -0.3, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalAlpha = 1.0;
 
         // Tongue
         if (this.tongueOut) {
@@ -854,57 +799,37 @@ class Snake {
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             ctx.moveTo(r * 1.3, 0);
-            ctx.lineTo(r * 2.1, 0);
-            ctx.moveTo(r * 1.9, 0);
-            ctx.lineTo(r * 2.3, -r * 0.25);
-            ctx.moveTo(r * 1.9, 0);
-            ctx.lineTo(r * 2.3, r * 0.25);
+            ctx.lineTo(r * 2.0, 0);
+            ctx.moveTo(r * 1.8, 0);
+            ctx.lineTo(r * 2.2, -r * 0.3);
+            ctx.moveTo(r * 1.8, 0);
+            ctx.lineTo(r * 2.2, r * 0.3);
             ctx.stroke();
         }
 
-        // Eyes (compact — fewer draw calls)
-        const ex = r * 0.55;
-        const ey = r * 0.5;
-        const er = r * 0.22;
-        const pr = er * 0.55;
+        // Eyes
+        const ex = r * 0.5;
+        const ey = r * 0.55;
+        const er = r * 0.25;
 
-        // Both eyes in one path where possible
         ctx.fillStyle = '#f0e68c';
         ctx.beginPath();
-        ctx.ellipse(ex, -ey, er, er * 1.2, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(ex, ey, er, er * 1.2, 0, 0, Math.PI * 2);
+        ctx.arc(ex, -ey, er, 0, Math.PI * 2);
+        ctx.arc(ex, ey, er, 0, Math.PI * 2);
         ctx.fill();
 
-        // Both pupils
+        // Pupils (vertical slit)
         ctx.fillStyle = '#111';
         ctx.beginPath();
-        ctx.ellipse(ex, -ey, pr * 0.35, pr * 1.2, 0, 0, Math.PI * 2);
+        ctx.ellipse(ex, -ey, er * 0.2, er * 0.7, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.ellipse(ex, ey, pr * 0.35, pr * 1.2, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Highlights
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.beginPath();
-        ctx.arc(ex - pr * 0.3, -ey - pr * 0.4, pr * 0.3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(ex - pr * 0.3, ey - pr * 0.4, pr * 0.3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Nostrils
-        ctx.fillStyle = this.nostrilColor;
-        ctx.beginPath();
-        ctx.arc(r * 1.1, -r * 0.15, 1, 0, Math.PI * 2);
-        ctx.arc(r * 1.1, r * 0.15, 1, 0, Math.PI * 2);
+        ctx.ellipse(ex, ey, er * 0.2, er * 0.7, 0, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.restore();
 
-        // Name tag (player only)
+        // Name tag
         if (this.isPlayer) {
             ctx.fillStyle = 'rgba(255,255,255,0.8)';
             ctx.font = 'bold 12px Outfit';
@@ -980,7 +905,7 @@ class AISnake extends Snake {
                 for (let i = 0; i < s.nodes.length; i += 5) {
                     const sdx = fx - s.nodes[i].x;
                     const sdy = fy - s.nodes[i].y;
-                    const threshold = s.getRadius(i) + 10;
+                    const threshold = s.getBodyWidth() / 2 + 10;
                     if (sdx * sdx + sdy * sdy < threshold * threshold) {
                         if (f.angle > 0) dangerLeft += 10;
                         else if (f.angle < 0) dangerRight += 10;

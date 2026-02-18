@@ -96,11 +96,21 @@ class Game {
         this.camera = { x: 0, y: 0, zoom: 1 };
         this.mouse = { x: 0, y: 0, down: false };
 
+        // Joystick State
+        this.joystick = {
+            active: false,
+            baseX: 0,
+            baseY: 0,
+            angle: 0,
+            radius: 65
+        };
+
         this.isRunning = false;
         this.isPaused = false;
         this.lives = 3;
         this.score = 0;
         this.keys = {};
+        this.isMobile = ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
         this.minimapCanvas = document.getElementById('minimap');
         this.minimapCtx = this.minimapCanvas.getContext('2d');
@@ -136,9 +146,12 @@ class Game {
     initInput() {
         window.addEventListener('resize', () => this.resize());
 
+        // Mouse Input
         window.addEventListener('mousemove', e => {
-            this.mouse.x = e.clientX - this.width / 2;
-            this.mouse.y = e.clientY - this.height / 2;
+            if (!this.joystick.active) {
+                this.mouse.x = e.clientX - this.width / 2;
+                this.mouse.y = e.clientY - this.height / 2;
+            }
         });
         window.addEventListener('mousedown', () => this.mouse.down = true);
         window.addEventListener('mouseup', () => this.mouse.down = false);
@@ -153,9 +166,60 @@ class Game {
             if (e.code === 'Space') this.mouse.down = false;
         });
 
+        // ═══ Mobile Joystick ═══
+        const joystickZone = document.getElementById('joystick-container');
+        const joystickHandle = document.getElementById('joystick-handle');
+        const boostBtn = document.getElementById('mobile-boost-btn');
+
+        if (joystickZone) {
+            joystickZone.addEventListener('touchstart', e => {
+                e.preventDefault();
+                const touch = e.changedTouches[0];
+                const rect = joystickZone.getBoundingClientRect();
+                this.joystick.baseX = rect.left + rect.width / 2;
+                this.joystick.baseY = rect.top + rect.height / 2;
+                this.joystick.active = true;
+                this.updateJoystick(touch.clientX, touch.clientY);
+            }, { passive: false });
+
+            joystickZone.addEventListener('touchmove', e => {
+                e.preventDefault();
+                if (this.joystick.active) {
+                    const touch = e.changedTouches[0];
+                    this.updateJoystick(touch.clientX, touch.clientY);
+                }
+            }, { passive: false });
+
+            joystickZone.addEventListener('touchend', e => {
+                e.preventDefault();
+                this.joystick.active = false;
+                if (joystickHandle) joystickHandle.style.transform = 'translate(-50%, -50%)';
+            });
+        }
+
+        // ═══ Mobile Boost ═══
+        if (boostBtn) {
+            boostBtn.addEventListener('touchstart', e => {
+                e.preventDefault();
+                this.mouse.down = true;
+            }, { passive: false });
+            boostBtn.addEventListener('touchend', e => {
+                e.preventDefault();
+                this.mouse.down = false;
+            });
+        }
+
+        // ═══ Zoom Controls ═══
+        const btnZoomIn = document.getElementById('btn-zoom-in');
+        const btnZoomOut = document.getElementById('btn-zoom-out');
+        if (btnZoomIn) btnZoomIn.addEventListener('click', () => this.adjustZoom(0.15));
+        if (btnZoomOut) btnZoomOut.addEventListener('click', () => this.adjustZoom(-0.15));
+
+        // ═══ UI Buttons ═══
         document.getElementById('btn-start').addEventListener('click', () => {
             document.getElementById('start-screen').style.display = 'none';
             this.startGame();
+            if (this.isMobile) document.getElementById('mobile-controls').style.display = 'block';
         });
         document.getElementById('btn-restart').addEventListener('click', () => {
             document.getElementById('game-over-screen').style.display = 'none';
@@ -187,6 +251,26 @@ class Game {
                 opt.classList.add('selected');
             });
         });
+    }
+
+    updateJoystick(touchX, touchY) {
+        const dx = touchX - this.joystick.baseX;
+        const dy = touchY - this.joystick.baseY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const maxDist = this.joystick.radius;
+
+        this.joystick.angle = Math.atan2(dy, dx);
+
+        const clampDist = Math.min(distance, maxDist);
+        const moveX = Math.cos(this.joystick.angle) * clampDist;
+        const moveY = Math.sin(this.joystick.angle) * clampDist;
+
+        const handle = document.getElementById('joystick-handle');
+        if (handle) handle.style.transform = `translate(calc(-50% + ${moveX}px), calc(-50% + ${moveY}px))`;
+    }
+
+    adjustZoom(delta) {
+        this.camera.zoom = Math.max(0.4, Math.min(2.0, this.camera.zoom + delta));
     }
 
     startGame() {
@@ -462,6 +546,8 @@ class Game {
     togglePause() {
         this.isPaused = !this.isPaused;
         document.getElementById('pause-screen').style.display = this.isPaused ? 'flex' : 'none';
+        const mc = document.getElementById('mobile-controls');
+        if (this.isMobile && mc) mc.style.display = this.isPaused ? 'none' : 'block';
     }
 
     continueGame() {
@@ -473,6 +559,7 @@ class Game {
         if (!this.snakes.includes(this.player)) this.snakes.push(this.player);
         this.isRunning = true;
         this.isPaused = false;
+        if (this.isMobile) document.getElementById('mobile-controls').style.display = 'block';
     }
 
     backToStart() {
@@ -481,6 +568,7 @@ class Game {
         document.getElementById('hud').style.display = 'none';
         document.getElementById('game-over-screen').style.display = 'none';
         document.getElementById('pause-screen').style.display = 'none';
+        document.getElementById('mobile-controls').style.display = 'none';
         document.getElementById('start-screen').style.display = 'flex';
     }
 
@@ -491,6 +579,7 @@ class Game {
         } else {
             this.isRunning = false;
             document.getElementById('hud').style.display = 'none';
+            document.getElementById('mobile-controls').style.display = 'none';
             document.getElementById('game-over-screen').style.display = 'flex';
             document.getElementById('final-score').innerText = Math.floor(this.score);
             document.getElementById('final-length').innerText = this.player.nodes.length;
@@ -579,7 +668,12 @@ class Snake {
 
     handleInput() {
         if (this.isPlayer) {
-            this.targetAngle = Math.atan2(this.game.mouse.y, this.game.mouse.x);
+            // Use joystick angle if active, otherwise mouse
+            if (this.game.joystick.active) {
+                this.targetAngle = this.game.joystick.angle;
+            } else {
+                this.targetAngle = Math.atan2(this.game.mouse.y, this.game.mouse.x);
+            }
 
             if (this.game.keys['KeyA'] || this.game.keys['ArrowLeft']) this.targetAngle = this.angle - 0.15;
             if (this.game.keys['KeyD'] || this.game.keys['ArrowRight']) this.targetAngle = this.angle + 0.15;

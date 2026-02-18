@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>난 뱀이닷 🐍</title>
+    <meta name="description" content="뱀 생존 게임 - AI 뱀들과 경쟁하여 최강의 뱀이 되어라!">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <canvas id="game-canvas"></canvas>
+
+    <!-- ═══ Start Screen ═══ -->
+    <div id="start-screen">
+        <div class="start-content">
+            <h1>🐍 난 뱀이닷</h1>
+            <p class="subtitle">뱀 생존 게임</p>
+
+            <div class="settings-box">
+                <label>AI 뱀 수: <span id="ai-count-label">10</span></label>
+                <input type="range" id="ai-count" min="1" max="20" value="10">
+
+                <label style="margin-top:15px; display:block;">난이도 (Difficulty)</label>
+                <select id="difficulty" style="margin-bottom:15px; padding:5px; width:100%; border-radius:5px;">
+                    <option value="easy">쉬움 (Easy)</option>
+                    <option value="normal" selected>보통 (Normal)</option>
+                    <option value="hard">어려움 (Hard)</option>
+                </select>
+
+                <label>내 뱀 스킨 (Skin)</label>
+                <div id="skin-selector">
+                    <div class="skin-option selected" data-type="solid" data-color="#00ff88" style="background:#00ff88">
+                    </div>
+                    <div class="skin-option" data-type="pattern" data-p="0"
+                        style="background:linear-gradient(45deg, #ff0000 50%, #ffffff 50%)"></div>
+                    <div class="skin-option" data-type="pattern" data-p="1"
+                        style="background:linear-gradient(45deg, #00ff00 50%, #ffff00 50%)"></div>
+                    <div class="skin-option" data-type="pattern" data-p="2"
+                        style="background:linear-gradient(45deg, #0000ff 50%, #00ffff 50%)"></div>
+                    <div class="skin-option" data-type="pattern" data-p="3"
+                        style="background:linear-gradient(45deg, #ff00ff 50%, #222222 50%)"></div>
+                </div>
+            </div>
+            <p>🖱️ 마우스 이동 → 방향 조절</p>
+            <p>🖱️ 클릭 홀드 → 부스트 가속</p>
+            <p>⌨️ WASD / 방향키 → 방향 전환</p>
+            <p>⌨️ 스페이스바 → 부스트 가속</p>
+        </div>
+
+        <button id="btn-start">🎮 게임 시작</button>
+    </div>
+    </div>
+
+    <!-- ═══ HUD ═══ -->
+    <div id="hud" style="display:none">
+        <div id="hud-top">
+            <div id="score-panel">
+                <span>점수: <b id="score">0</b></span>
+                <span>길이: <b id="length">5</b></span>
+                <span id="lives">❤️❤️❤️</span>
+            </div>
+            <div id="boost-panel">
+                <span>⚡</span>
+                <div id="boost-bar-bg">
+                    <div id="boost-bar"></div>
+                </div>
+            </div>
+            <div id="shield-indicator" style="display:none">🛡️ Shield</div>
+        </div>
+
+        <div id="ranking-panel">
+            <h3>🏆 랭킹</h3>
+            <div id="ranking-list"></div>
+        </div>
+
+        <canvas id="minimap" width="150" height="150"></canvas>
+    </div>
+
+    <!-- ═══ Game Over Screen ═══ -->
+    <div id="game-over-screen" style="display:none">
+        <h1>💀 게임 오버</h1>
+        <p>최종 점수: <b id="final-score">0</b></p>
+        <p>최종 길이: <b id="final-length">0</b></p>
+        <button id="btn-restart">🔄 다시 시작</button>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+
+</html>

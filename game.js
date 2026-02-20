@@ -246,6 +246,13 @@ class Game {
             aiSlider.addEventListener('input', e => aiLabel.innerText = e.target.value);
         }
 
+        document.querySelectorAll('.diff-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.diff-btn').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+            });
+        });
+
         document.querySelectorAll('.skin-option').forEach(opt => {
             opt.addEventListener('click', () => {
                 document.querySelectorAll('.skin-option').forEach(o => o.classList.remove('selected'));
@@ -297,7 +304,9 @@ class Game {
         this.snakes.push(this.player);
 
         this.targetAICount = parseInt(document.getElementById('ai-count').value) || DEFAULT_AI;
-        this.difficulty = document.getElementById('difficulty').value;
+
+        const selectedDiff = document.querySelector('.diff-btn.selected');
+        this.difficulty = selectedDiff ? selectedDiff.dataset.val : 'normal';
 
         for (let i = 0; i < this.targetAICount; i++) this.spawnAI();
         for (let i = 0; i < FOOD_COUNT; i++) this.spawnFood();
@@ -711,7 +720,18 @@ class Snake {
         if (this.y < -WORLD_SIZE) this.y = -WORLD_SIZE;
         if (this.y > WORLD_SIZE) this.y = WORLD_SIZE;
 
-        this.nodes.unshift({ x: this.x, y: this.y });
+        // Object Pooling: 재사용 가능한 꼬리 노드가 있으면 꺼내서 머리로 사용
+        let newNode;
+        // 배열 길이가 최대 길이에 도달했거나 넘어선 경우, 맨 끝을 뽑아서 머리로 재활용
+        if (this.nodes.length >= this.maxLength) {
+            newNode = this.nodes.pop();
+            newNode.x = this.x;
+            newNode.y = this.y;
+        } else {
+            // 아직 크고 있는 중이면 새 객체 생성 허용
+            newNode = { x: this.x, y: this.y };
+        }
+        this.nodes.unshift(newNode);
 
         for (let i = 1; i < this.nodes.length; i++) {
             const prev = this.nodes[i - 1];
@@ -726,7 +746,11 @@ class Snake {
             }
         }
 
-        while (this.nodes.length > this.maxLength) this.nodes.pop();
+        // 초과분 제거 루프는 위에서 하나씩 빼서 썼으므로 거의 실행되지 않지만 안전장치로 유지
+        // 여기서는 메모리 해제를 최소화하기 위해 this.maxLength를 여유 있게 유지
+        while (this.nodes.length > this.maxLength) {
+            this.nodes.pop();
+        }
     }
 
     checkCollision() {
@@ -772,12 +796,13 @@ class Snake {
     }
 
     getBodyWidth() {
-        // Thickness grows noticeably as snake eats
-        return Math.min(22, 5 + Math.floor(this.nodes.length / 6));
+        // Thickness increases by 1 for every 20 length, max 40
+        return Math.min(40, 8 + (this.nodes.length / 20));
     }
 
     grow(amount) {
-        this.maxLength += amount * 2;
+        // 기존 amount * 2 에서 2배수 제거 (뱀 성장 속도 둔화)
+        this.maxLength += amount;
     }
 
     die(killer) {
@@ -1033,7 +1058,7 @@ class AISnake extends Snake {
         if (this.y < -WORLD_SIZE + margin) { this.targetAngle = Math.PI / 2; return; }
         if (this.y > WORLD_SIZE - margin) { this.targetAngle = -Math.PI / 2; return; }
 
-        // Food Seeking
+        // Target Seeking (Pure Survival and Growth)
         if (this.timer <= 0 || !this.target || !this.target.active) {
             this.target = this.findBestFood();
             this.timer = this.reactTimer;
@@ -1041,8 +1066,17 @@ class AISnake extends Snake {
 
         if (this.target) {
             this.targetAngle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+            // 어려운 난이도: 먹이가 꽤 가깝고 경로상 위험이 없다면 부스트로 먹이를 선점
+            if (this.difficulty === 'hard' && this.energy > 50) {
+                const tx = this.target.x - this.x;
+                const ty = this.target.y - this.y;
+                if (tx * tx + ty * ty < 200 * 200) {
+                    this.boosting = true;
+                    this.energy -= 0.5;
+                }
+            }
         } else {
-            if (Math.random() < 0.03) this.targetAngle += rand(-0.5, 0.5);
+            if (Math.random() < 0.05) this.targetAngle += rand(-0.5, 0.5);
         }
     }
 
@@ -1052,14 +1086,46 @@ class AISnake extends Snake {
         const foods = this.game.foods;
         const len = foods.length;
 
-        for (let i = 0; i < 20; i++) {
-            const f = foods[randInt(0, len)];
+        // 난이도별 스파셜 탐색 정밀도 조절
+        // 하드는 맵 전체 시야 범위 먹이 스캔, 쉬움은 랜덤 20개, 보통은 50개 샘플
+        const searchCount = this.difficulty === 'hard' ? len : (this.difficulty === 'easy' ? 20 : 50);
+
+        for (let i = 0; i < searchCount; i++) {
+            const f = foods[this.difficulty === 'hard' ? i : randInt(0, len)];
             if (!f || !f.active) continue;
-            const dx = this.x - f.x;
-            const dy = this.y - f.y;
+
+            const dx = f.x - this.x;
+            const dy = f.y - this.y;
             const d2 = dx * dx + dy * dy;
+
             if (d2 > this.fov * this.fov) continue;
-            const score = f.value / (d2 + 1);
+
+            // 시야각 페널티 (앞에 있는 먹이를 선호)
+            let angleToFood = Math.atan2(dy, dx);
+            let angleDiff = Math.abs(angleToFood - this.angle);
+            while (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff;
+
+            let anglePenalty = 1.0;
+            if (angleDiff > Math.PI / 2) anglePenalty = 0.4; // 90도 밖 뒤에 있는 먹이는 우선순위 대폭 하락
+            if (this.difficulty === 'easy') anglePenalty = 1.0;
+
+            // 생존 지향: 어려운 난이도일 경우 해당 먹이 근처에 다른 뱀의 머리가 있다면 점수를 대폭 삭감하여 위험 회피
+            let safetyPenalty = 1.0;
+            if (this.difficulty === 'hard') {
+                for (let si = 0; si < this.game.snakes.length; si++) {
+                    const otherSnake = this.game.snakes[si];
+                    if (!otherSnake.alive || otherSnake === this) continue;
+                    // 다른 뱀의 머리와 해당 먹이의 거리 측정
+                    const odx = f.x - otherSnake.x;
+                    const ody = f.y - otherSnake.y;
+                    if (odx * odx + ody * ody < 150 * 150) {
+                        safetyPenalty = 0.1; // 다른 뱀 반경 150 이내의 먹이는 매우 위험하다고 판단
+                        break;
+                    }
+                }
+            }
+
+            const score = (f.value * anglePenalty * safetyPenalty) / (d2 + 1);
             if (score > bestScore) {
                 bestScore = score;
                 best = f;

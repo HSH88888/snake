@@ -23,12 +23,12 @@
                 <label>AI 뱀 수: <span id="ai-count-label">10</span></label>
                 <input type="range" id="ai-count" min="1" max="10" value="10">
 
-                <label style="margin-top:15px; display:block;">난이도 (Difficulty)</label>
-                <select id="difficulty" style="margin-bottom:15px; padding:5px; width:100%; border-radius:5px;">
-                    <option value="easy">쉬움 (Easy)</option>
-                    <option value="normal" selected>보통 (Normal)</option>
-                    <option value="hard">어려움 (Hard)</option>
-                </select>
+                <label style="margin-top:15px; display:block; margin-bottom:5px;">난이도 (Difficulty)</label>
+                <div id="difficulty-selector" style="display:flex; justify-content:space-between; gap:10px; margin-bottom:15px;">
+                    <button type="button" class="diff-btn" data-val="easy">쉬움</button>
+                    <button type="button" class="diff-btn selected" data-val="normal">보통</button>
+                    <button type="button" class="diff-btn" data-val="hard">어려움</button>
+                </div>
 
                 <label>내 뱀 스킨 (Skin)</label>
                 <div id="skin-selector">

@@ -256,6 +256,31 @@ h1 {
     transform: scale(1.1);
 }
 
+.diff-btn {
+    flex: 1;
+    padding: 8px 5px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: none;
+}
+
+.diff-btn:hover {
+    transform: none;
+    box-shadow: none;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.diff-btn.selected {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    color: #000;
+    border: 2px solid #fff;
+    box-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+}
+
 /* ═══ Mobile Controls ═══ */
 #mobile-controls {
     position: absolute;
